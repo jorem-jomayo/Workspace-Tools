@@ -25,92 +25,14 @@ import base64
 st.set_page_config(page_title="Workspace Tools", page_icon="🧰", layout="wide")
 
 # ========== SESSION STATE INIT ==========
-if 'entered' not in st.session_state:
-    st.session_state.entered = False  # Show welcome page initially
 if 'pasted_codes_input' not in st.session_state:
     st.session_state.pasted_codes_input = ""  # for resetting the text area
 
-# ========== WELCOME PAGE ==========
-if not st.session_state.entered:
-    # Hide sidebar and set full-width welcome layout
-    st.markdown(
-        """
-        <style>
-        section[data-testid="stSidebar"] {
-            display: none !important;
-        }
-        .main > div {
-            padding: 2rem 4rem;
-        }
-        .welcome-card {
-            border-radius: 30px;
-            padding: 3rem 4rem;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.08);
-            text-align: center;
-            max-width: 700px;
-            margin: 5rem auto;
-            border: 1px solid rgba(0,0,0,0.05);
-            background: var(--background-color);
-        }
-        .welcome-title {
-            font-size: 3.2rem;
-            font-weight: 700;
-            color: var(--text-color);
-            margin-bottom: 0.5rem;
-        }
-        .welcome-sub {
-            font-size: 1.2rem;
-            color: var(--text-color-secondary);
-            margin-bottom: 2rem;
-        }
-        .welcome-emoji {
-            font-size: 4rem;
-            margin-bottom: 1rem;
-        }
-        .stButton > button {
-            background: #2e7d32 !important;
-            color: white !important;
-            border: none !important;
-            padding: 0.8rem 3rem !important;
-            border-radius: 40px !important;
-            font-size: 1.2rem !important;
-            font-weight: 600 !important;
-            box-shadow: 0 8px 20px rgba(46, 125, 50, 0.25);
-            transition: all 0.3s ease;
-        }
-        .stButton > button:hover {
-            transform: translateY(-3px);
-            box-shadow: 0 12px 28px rgba(46, 125, 50, 0.35);
-            background: #1b5e20 !important;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    st.markdown("""
-        <div class="welcome-card">
-            <div class="welcome-emoji">🧰</div>
-            <div class="welcome-title">Welcome to Workspace Tools</div>
-            <div class="welcome-sub">
-                Your all‑in‑one toolkit for VRP mapping, field results, and signature extraction.<br>
-                Click the button below to get started.
-            </div>
-        </div>
-    """, unsafe_allow_html=True)
-
-    col1, col2, col3 = st.columns([1, 1, 1])
-    with col2:
-        if st.button("🚀 Enter Workspace", use_container_width=False):
-            st.session_state.entered = True
-            st.rerun()
-    st.stop()
-
-# ========== BUTTON ANIMATION STYLING (kept) ==========
+# ========== BUTTON ANIMATION STYLING ==========
 st.markdown(
     """
     <style>
-    /* Button hover/active animations (original) */
+    /* Button hover/active animations */
     .stButton > button, .stDownloadButton > button {
         transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
         border-radius: 8px !important;
