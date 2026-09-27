@@ -369,15 +369,36 @@ if selected_tool == "VRP Mapper":
                 df_out[template_col] = df_src[src_col].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
                 df_out[template_col] = df_out[template_col].replace(['nan', 'None', ''], '0')
             elif template_col == 'address':
-                df_out[template_col] = (
+                addr_series = (
                     df_src[src_col]
                     .fillna('')
                     .str.replace('Blk', 'Block', case=False, regex=False)
                     .str.replace('BRGY', 'BARANGAY', case=False, regex=False)
                     .str.replace(r'\bSTA\b\.?', 'SANTA', case=False, regex=True)
                     .str.replace(r'\bSTO\b\.?', 'SANTO', case=False, regex=True)
+                )
+                # --------------------------------------------------------------
+                # REMOVE "C/O <NAME>" pattern from address
+                # Handles: "C/O JOHN DOE", "C/O: JOHN DOE", "C/O - JOHN DOE"
+                # The pattern stops at: a digit, a comma, end of string,
+                # or a common address marker (BLOCK, LOT, BARANGAY, STREET, etc.)
+                # --------------------------------------------------------------
+                addr_series = addr_series.str.replace(
+                    r"C/O\s*[:\-]?\s*[A-Za-z][A-Za-z'\.\-\s]*?(?=\s*\d|,|\s+(?:BLOCK|LOT|BARANGAY|STREET|AVE|AVENUE|ROAD|RD|PUROK|POB|UNIT|BLDG|BUILDING|HOUSE|HSE)\b|$)",
+                    '',
+                    regex=True,
+                    case=False
+                )
+                # Clean up leftover double spaces, stray commas, leading/trailing junk
+                addr_series = (
+                    addr_series
+                    .str.replace(r'\s+', ' ', regex=True)
+                    .str.replace(r',\s*,', ',', regex=True)
+                    .str.replace(r'^[,\s]+', '', regex=True)
+                    .str.replace(r'[,\s]+$', '', regex=True)
                     .str.upper()
                 )
+                df_out[template_col] = addr_series
             elif template_col == 'outstanding_balance':
                 vals = df_src[src_col].astype(str).str.strip().str.replace(',', '', regex=False)
                 def format_general_number(val):
