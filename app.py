@@ -119,9 +119,7 @@ if 'field_result_extra_csv' not in st.session_state:
     st.session_state.field_result_extra_csv = None
 
 def reset_app():
-    # Increment uploader key to reset file uploader
     st.session_state.uploader_key += 1
-    # Clear all processed data and flags
     st.session_state.processed_data = None
     st.session_state.release_data = None
     st.session_state.selected_type = None
@@ -129,8 +127,7 @@ def reset_app():
     st.session_state.process_confirm = False
     st.session_state.is_multiple_files = False
     st.session_state.cms_id_warning = None
-    # Clear pasted codes text area safely
-    st.session_state.pop('pasted_codes_input', None)  # remove key, widget will reset to default
+    st.session_state.pop('pasted_codes_input', None)
     st.rerun()
 
 # ========== SIDEBAR ==========
@@ -247,7 +244,7 @@ if selected_tool == "VRP Mapper":
             key=f"uploader_{st.session_state.uploader_key}"
         )
 
-    # Optional filter (pasted codes) - now with a key for resetting
+    # Optional filter (pasted codes)
     pasted_codes = st.text_area(
         "Paste Reference Codes (Optional filter - one per line):",
         height=150,
@@ -281,7 +278,7 @@ if selected_tool == "VRP Mapper":
                 elif "MC2" in raw_name and "OTHERS" in raw_name:
                     file_type = "DL"
                 df_temp['_FILE_ASSIGNED_TYPE'] = file_type
-                df_temp['_FILE_RAW_NAME'] = raw_name          # store filename
+                df_temp['_FILE_RAW_NAME'] = raw_name
                 df_list.append(df_temp)
             df_master = pd.concat(df_list, ignore_index=True)
             is_multiple = True
@@ -347,6 +344,7 @@ if selected_tool == "VRP Mapper":
             'outstanding_balance': ['OB/PRINCIPAL', 'OB_PRINCIPAL', 'OBPRINCIPAL', 'OB'],
             'endorsement_date': ['ENDO DATE', 'ENDO_DATE', 'ENDODATE', 'ENDORSEMENT DATE'],
             'pullout_date': ['POUT DATE', 'POUT_DATE', 'POUTDATE', 'PULLOUT DATE'],
+            'type_of_account': ['TYPE OF ACCOUNT', 'TYPE_OF_ACCOUNT', 'TYPEOFACCOUNT', 'ACCOUNT TYPE', 'ACCOUNT_TYPE'],
         }
 
         def find_column(source_cols, aliases):
@@ -377,19 +375,13 @@ if selected_tool == "VRP Mapper":
                     .str.replace(r'\bSTA\b\.?', 'SANTA', case=False, regex=True)
                     .str.replace(r'\bSTO\b\.?', 'SANTO', case=False, regex=True)
                 )
-                # --------------------------------------------------------------
-                # REMOVE "C/O <NAME>" pattern from address
-                # Handles: "C/O JOHN DOE", "C/O: JOHN DOE", "C/O - JOHN DOE"
-                # The pattern stops at: a digit, a comma, end of string,
-                # or a common address marker (BLOCK, LOT, BARANGAY, STREET, etc.)
-                # --------------------------------------------------------------
+                # Remove "C/O <NAME>"
                 addr_series = addr_series.str.replace(
                     r"C/O\s*[:\-]?\s*[A-Za-z][A-Za-z'\.\-\s]*?(?=\s*\d|,|\s+(?:BLOCK|LOT|BARANGAY|STREET|AVE|AVENUE|ROAD|RD|PUROK|POB|UNIT|BLDG|BUILDING|HOUSE|HSE)\b|$)",
                     '',
                     regex=True,
                     case=False
                 )
-                # Clean up leftover double spaces, stray commas, leading/trailing junk
                 addr_series = (
                     addr_series
                     .str.replace(r'\s+', ' ', regex=True)
@@ -415,6 +407,17 @@ if selected_tool == "VRP Mapper":
                     except ValueError:
                         return val
                 df_out[template_col] = vals.apply(format_general_number)
+            elif template_col == 'type_of_account':
+                # Normalize the source type of account values
+                src_vals = df_src[src_col].astype(str).str.strip()
+                def normalize_type(v):
+                    v_up = v.upper()
+                    if 'TRANS' in v_up or 'DETAIL' in v_up:
+                        return "Trans/Details"
+                    if v_up == 'DL' or 'DL' in v_up:
+                        return "DL"
+                    return v  # keep original if unknown
+                df_out[template_col] = src_vals.apply(normalize_type)
             else:
                 df_out[template_col] = df_src[src_col]
 
@@ -438,7 +441,6 @@ if selected_tool == "VRP Mapper":
 
             # ---------------------------------------------------------------
             # VALIDATION: Check for missing CMS IDs across ALL rows
-            # If ANY row has a blank CMS ID, halt the process and warn the user.
             # ---------------------------------------------------------------
             blank_cms_mask = df_out['cms_id'] == ''
 
@@ -463,21 +465,27 @@ if selected_tool == "VRP Mapper":
 
         df_out['shared_or_exclusive'] = "SHARED"
 
-        # --- TYPE OF ACCOUNT & VISIT TYPE ---
-        if version == "MC2":
-            if is_multiple:
-                df_out['type_of_account'] = df_src['_FILE_ASSIGNED_TYPE']
-            else:
-                if '_FILE_ASSIGNED_TYPE' in df_src.columns:
+        # --- TYPE OF ACCOUNT ---
+        # Priority: source column (from TYPE OF ACCOUNT in upload) > filename detection
+        if 'type_of_account' in matched_cols:
+            # Already set from the mapping loop above — keep those values.
+            pass
+        else:
+            # Fall back to filename-based detection
+            if version == "MC2":
+                if is_multiple:
                     df_out['type_of_account'] = df_src['_FILE_ASSIGNED_TYPE']
                 else:
-                    df_out['type_of_account'] = "DL"
-        elif version == "FCL":
-            df_out['type_of_account'] = "DL"
+                    if '_FILE_ASSIGNED_TYPE' in df_src.columns:
+                        df_out['type_of_account'] = df_src['_FILE_ASSIGNED_TYPE']
+                    else:
+                        df_out['type_of_account'] = "DL"
+            elif version == "FCL":
+                df_out['type_of_account'] = "DL"
 
+        # --- VISIT TYPE ---
         if version == "MC2":
             def determine_visit_type_mc2(idx, row):
-                # Force REGULAR for specific file patterns
                 file_name = str(row.get('_FILE_RAW_NAME', '')).upper()
                 if any(pattern in file_name for pattern in ["TAG_PIF WITH DL", "TAG_PIF REVISIT- NO DL", "TAG_MC2- OTHERS"]):
                     return "REGULAR"
@@ -618,10 +626,8 @@ elif selected_tool == "Field Result":
     st.title("📊 Field Result Column Extractor")
     st.write("Upload an Excel workbook containing a sheet named **'RESULT'** to run the macro extraction.")
 
-    # ===== FIXED COLUMN INDICES (0‑based) =====
-    REF_CODE_COL = 41          # Column AP
-    FIELD_NAME_COL = 26        # Column AA
-    # ===========================================
+    REF_CODE_COL = 41
+    FIELD_NAME_COL = 26
 
     excel_file = st.file_uploader("Upload Workbook (.xlsx)", type=['xlsx'], key="field_result_uploader")
 
