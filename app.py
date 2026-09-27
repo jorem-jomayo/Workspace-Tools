@@ -228,11 +228,11 @@ st.sidebar.info("Select a tool from the menu above to get started.")
 if selected_tool == "VRP Mapper":
     st.title("🚀 VRP Mapper")
 
-    # --- Version Dropdown ---
+    # --- Version Dropdown (OTS removed) ---
     version = st.selectbox(
         "Select Version:",
-        options=["MC2", "FCL", "OTS"],
-        index=["MC2", "FCL", "OTS"].index(st.session_state.version),
+        options=["MC2", "FCL"],
+        index=["MC2", "FCL"].index(st.session_state.version),
         key="version_select"
     )
     st.session_state.version = version
@@ -317,7 +317,7 @@ if selected_tool == "VRP Mapper":
             accept_multiple_files=True,
             key=f"uploader_{st.session_state.uploader_key}"
         )
-    else:  # FCL or OTS
+    else:  # FCL
         src_files = st.file_uploader(
             "Upload VRP ACCOUNTS Excel file",
             type=['xlsx'],
@@ -359,12 +359,12 @@ if selected_tool == "VRP Mapper":
                 elif "MC2" in raw_name and "OTHERS" in raw_name:
                     file_type = "DL"
                 df_temp['_FILE_ASSIGNED_TYPE'] = file_type
-                df_temp['_FILE_RAW_NAME'] = raw_name          # <--- NEW: store filename
+                df_temp['_FILE_RAW_NAME'] = raw_name          # store filename
                 df_list.append(df_temp)
             df_master = pd.concat(df_list, ignore_index=True)
             is_multiple = True
         else:
-            # FCL or OTS – single Excel file, read sheet "SUMMARY"
+            # FCL – single Excel file, read sheet "SUMMARY"
             if src_files is None:
                 st.warning("Please upload an Excel file.")
                 st.stop()
@@ -485,40 +485,35 @@ if selected_tool == "VRP Mapper":
 
         time.sleep(0.2)
 
-        # ======================================================================
-        # --- AMOUNT DUE & CMS ID (with PIF HOME LOAN validation) ---
-        # ======================================================================
+        # --- AMOUNT DUE & CMS ID ---
         progress_bar.progress(60, text="Calculating constants, amounts, and CMS IDs...")
-
-        # Find bank column (needed for validation and later filename)
-        bank_col = None
-        for col in df_src.columns:
-            col_clean = col.strip().upper().replace(" ", "").replace("_", "").replace("/", "")
-            if col_clean == 'BANK':
-                bank_col = col
-                break
 
         if 'ch_code' in matched_cols:
             ch_codes = df_out['ch_code'].astype(str).str.strip().str.upper()
             df_out['amount_due'] = ch_codes.map(amounts_due_mapping).fillna('0')
             df_out['cms_id'] = ch_codes.map(cms_mapping).fillna('')
 
-            # ---- NEW VALIDATION: only for MC2 / OTS and only for PIF HOME LOAN rows ----
-            if version in ['MC2', 'OTS'] and bank_col is not None:
-                is_pif = df_src[bank_col].astype(str).str.strip().str.upper().str.contains('PIF HOMELOAN', na=False)
-                blank_cms_mask = (df_out['cms_id'] == '') & is_pif
-                if blank_cms_mask.any():
-                    missing_ch_codes = sorted(set(df_out.loc[blank_cms_mask, 'ch_code'].astype(str).str.strip()))
-                    progress_bar.empty()
-                    st.session_state.process_confirm = False
-                    st.error(
-                        f"🚨 **PROCESS HALTED:** Found {blank_cms_mask.sum()} PIF HOMELOAN row(s) with a blank CMS ID.\n\n"
-                        f"**Missing CH CODE(s):** {', '.join(missing_ch_codes)}\n\n"
-                        f"Please update your 'cmd_id.xlsx' reference file and try again."
-                    )
-                    st.stop()
-            # -------------------------------------------------------------------------
+            # ---------------------------------------------------------------
+            # VALIDATION: Check for missing CMS IDs across ALL rows
+            # If ANY row has a blank CMS ID, halt the process and warn the user.
+            # ---------------------------------------------------------------
+            blank_cms_mask = df_out['cms_id'] == ''
 
+            if blank_cms_mask.any():
+                missing_ch_codes = sorted(
+                    set(df_out.loc[blank_cms_mask, 'ch_code'].astype(str).str.strip())
+                )
+                progress_bar.empty()
+                st.session_state.process_confirm = False
+                st.error(
+                    f"🚨 **PROCESS HALTED — MISSING CMS ID**\n\n"
+                    f"Found **{int(blank_cms_mask.sum())}** row(s) with a blank CMS ID.\n\n"
+                    f"**Missing CH CODE(s):**\n"
+                    f"{', '.join(missing_ch_codes)}\n\n"
+                    f"➡️ Please update `cmd_id.xlsx` with the missing CMS ID(s) and re-run the process."
+                )
+                st.stop()
+            # ---------------------------------------------------------------
         else:
             df_out['amount_due'] = '0'
             df_out['cms_id'] = ''
@@ -536,8 +531,6 @@ if selected_tool == "VRP Mapper":
                     df_out['type_of_account'] = "DL"
         elif version == "FCL":
             df_out['type_of_account'] = "DL"
-        elif version == "OTS":
-            df_out['type_of_account'] = "Trans/Details"
 
         if version == "MC2":
             def determine_visit_type_mc2(idx, row):
@@ -545,7 +538,7 @@ if selected_tool == "VRP Mapper":
                 file_name = str(row.get('_FILE_RAW_NAME', '')).upper()
                 if any(pattern in file_name for pattern in ["TAG_PIF WITH DL", "TAG_PIF REVISIT- NO DL", "TAG_MC2- OTHERS"]):
                     return "REGULAR"
-                
+
                 current_type = df_out.at[idx, 'type_of_account']
                 if current_type == "Trans/Details":
                     return "REGULAR"
@@ -564,8 +557,6 @@ if selected_tool == "VRP Mapper":
             df_out['visit_type'] = [determine_visit_type_mc2(idx, row) for idx, row in df_src.iterrows()]
         elif version == "FCL":
             df_out['visit_type'] = "OTS"
-        elif version == "OTS":
-            df_out['visit_type'] = "REGULAR"
 
         df_out['month'] = datetime.now().strftime('%B').upper()
         df_out['account_type'] = "HOUSING"
@@ -587,7 +578,12 @@ if selected_tool == "VRP Mapper":
         progress_bar.progress(95, text="Generating final files...")
         total_accounts = len(df_out)
         if version == "MC2":
-            # Reuse bank_col found above (if still needed)
+            bank_col = None
+            for col in df_src.columns:
+                col_clean = col.strip().upper().replace(" ", "").replace("_", "").replace("/", "")
+                if col_clean == 'BANK':
+                    bank_col = col
+                    break
             if bank_col:
                 unique_banks = df_src[bank_col].astype(str).str.strip().str.upper().replace({'NAN': ''}).unique()
                 unique_banks = [b for b in unique_banks if b]
@@ -599,10 +595,8 @@ if selected_tool == "VRP Mapper":
                     bank_val = "MC2 OTHERS"
             else:
                 bank_val = "FILTERED"
-        elif version == "FCL":
+        else:  # FCL
             bank_val = "FCL"
-        else:
-            bank_val = "OTS"
 
         st.session_state.generated_filename = f"{bank_val}_{total_accounts}.csv"
         st.session_state.release_filename = f"Released_to_{bank_val}_{total_accounts}.csv"
@@ -617,18 +611,11 @@ if selected_tool == "VRP Mapper":
                 break
 
         released_to_col = None
-        if version == "OTS":
-            for col in df_src.columns:
-                col_clean = col.strip().upper().replace(" ", "").replace("_", "")
-                if col_clean == 'TAGFM':
-                    released_to_col = col
-                    break
-        else:   # For MC2, try to find a column that likely holds the released‑to information
-            for col in df_src.columns:
-                col_clean = col.strip().upper().replace(" ", "").replace("_", "")
-                if col_clean in ['TAGFM', 'RELEASEDTO', 'TAG']:
-                    released_to_col = col
-                    break
+        for col in df_src.columns:
+            col_clean = col.strip().upper().replace(" ", "").replace("_", "")
+            if col_clean in ['TAGFM', 'RELEASEDTO', 'TAG']:
+                released_to_col = col
+                break
 
         df_rel = pd.DataFrame()
         df_rel['REF CODE'] = df_src[ref_col_release] if ref_col_release else ""
@@ -689,10 +676,8 @@ elif selected_tool == "Field Result":
     st.write("Upload an Excel workbook containing a sheet named **'RESULT'** to run the macro extraction.")
 
     # ===== FIXED COLUMN INDICES (0‑based) =====
-    # ⚠️ PLEASE SET THE CORRECT COLUMN INDEX FOR YOUR REFERENCE CODE
-    # Column AA = 26, Column AP = 41, etc.
-    REF_CODE_COL = 41          # Currently set to AP – CHANGE THIS to your actual Ref Code column
-    FIELD_NAME_COL = 26        # Column AA – keep as is for Field Name
+    REF_CODE_COL = 41          # Column AP
+    FIELD_NAME_COL = 26        # Column AA
     # ===========================================
 
     excel_file = st.file_uploader("Upload Workbook (.xlsx)", type=['xlsx'], key="field_result_uploader")
@@ -713,29 +698,22 @@ elif selected_tool == "Field Result":
                     progress_bar.progress(25, text="Extracting relevant columns...")
                     time.sleep(0.2)
 
-                    # Read the whole sheet without header to keep raw data
                     df_source = pd.read_excel(excel_file, sheet_name=target_sheet, header=None, dtype=str)
-                    # Ensure enough columns
                     max_needed = max(41, FIELD_NAME_COL, REF_CODE_COL) + 1
                     if df_source.shape[1] <= max_needed:
                         for i in range(df_source.shape[1], max_needed + 1):
                             df_source[i] = ""
 
-                    # --- 1. Extract the 7 original columns (macro indices) ---
                     df_target = pd.DataFrame()
-                    df_target[0] = df_source[41]   # Column AP (macro column 41)
+                    df_target[0] = df_source[41]
                     df_target[1] = df_source[2]
                     df_target[2] = df_source[3]
                     df_target[3] = df_source[4]
                     df_target[4] = df_source[27]
                     df_target[5] = df_source[32]
                     df_target[6] = df_source[36]
-
-                    # --- 2. Add Field Name (AA) as last column ---
                     df_target[7] = df_source[FIELD_NAME_COL]
 
-                    # --- 3. Build the extra CSV with Ref Code and Field Name ---
-                    # Skip the first row (which likely contains column headers)
                     df_source_data = df_source.iloc[1:].reset_index(drop=True)
                     df_csv_extra = pd.DataFrame({
                         'Ref Code': df_source_data[REF_CODE_COL],
@@ -792,7 +770,6 @@ elif selected_tool == "Field Result":
                     wb_out.save(output_buffer)
                     output_buffer.seek(0)
 
-                    # Save extra CSV
                     csv_extra_buffer = io.BytesIO()
                     df_csv_extra.to_csv(csv_extra_buffer, index=False)
                     csv_extra_buffer.seek(0)
@@ -811,8 +788,6 @@ elif selected_tool == "Field Result":
                     st.success(f"✅ Extraction and formatting (mm/dd/yyyy) successful! (Elapsed: {elapsed:.2f}s)")
                     play_completion_sound()
 
-                    # ---- PREVIEW TABLE REMOVED ----
-
             except Exception as e:
                 st.error(f"❌ Error processing file: {str(e)}")
                 st.session_state.field_result_processed = False
@@ -830,7 +805,7 @@ elif selected_tool == "Field Result":
             st.download_button(
                 label="📥 Download Ref Code & Field Name CSV (fieldman.csv)",
                 data=st.session_state.field_result_extra_csv,
-                file_name="fieldman.csv",   # fixed filename
+                file_name="fieldman.csv",
                 mime="text/csv",
                 use_container_width=True,
                 key="field_result_extra_download"
