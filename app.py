@@ -476,19 +476,20 @@ if selected_tool == "VRP Mapper":
         df_out['shared_or_exclusive'] = "SHARED"
 
         # --- TYPE OF ACCOUNT ---
-        if 'type_of_account' in matched_cols:
-            pass  # already set from source
+        # ✅ FCL: palaging "DL" (hindi na titingnan ang source column)
+        if version == "FCL":
+            df_out['type_of_account'] = "DL"
+        elif 'type_of_account' in matched_cols:
+            pass  # MC2: gamitin ang value mula sa source column
         else:
-            if version == "MC2":
-                if is_multiple:
+            # MC2: walang source column — fallback logic
+            if is_multiple:
+                df_out['type_of_account'] = df_src['_FILE_ASSIGNED_TYPE']
+            else:
+                if '_FILE_ASSIGNED_TYPE' in df_src.columns:
                     df_out['type_of_account'] = df_src['_FILE_ASSIGNED_TYPE']
                 else:
-                    if '_FILE_ASSIGNED_TYPE' in df_src.columns:
-                        df_out['type_of_account'] = df_src['_FILE_ASSIGNED_TYPE']
-                    else:
-                        df_out['type_of_account'] = "DL"
-            elif version == "FCL":
-                df_out['type_of_account'] = "DL"
+                    df_out['type_of_account'] = "DL"
 
         if version == "MC2":
             def determine_visit_type_mc2(idx, row):
