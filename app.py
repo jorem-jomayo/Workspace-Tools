@@ -425,27 +425,50 @@ if selected_tool == "VRP Mapper":
 
         progress_bar.progress(60, text="Calculating constants, amounts, and CMS IDs...")
 
+        # --- Determine bank value EARLY (needed for CMS ID validation) ---
+        if version == "MC2":
+            bank_col = None
+            for col in df_src.columns:
+                col_clean = col.strip().upper().replace(" ", "").replace("_", "").replace("/", "")
+                if col_clean == 'BANK':
+                    bank_col = col
+                    break
+            if bank_col:
+                unique_banks = df_src[bank_col].astype(str).str.strip().str.upper().replace({'NAN': ''}).unique()
+                unique_banks = [b for b in unique_banks if b]
+                if len(unique_banks) == 1 and unique_banks[0] == "PIF HOMELOAN":
+                    bank_val = "PIF HOME LOAN"
+                elif len(unique_banks) == 1:
+                    bank_val = unique_banks[0]
+                else:
+                    bank_val = "MC2 OTHERS"
+            else:
+                bank_val = "FILTERED"
+        else:
+            bank_val = "FCL"
+
         if 'ch_code' in matched_cols:
             ch_codes = df_out['ch_code'].astype(str).str.strip().str.upper()
             df_out['amount_due'] = ch_codes.map(amounts_due_mapping).fillna('0')
             df_out['cms_id'] = ch_codes.map(cms_mapping).fillna('')
 
-            blank_cms_mask = df_out['cms_id'] == ''
-
-            if blank_cms_mask.any():
-                missing_ch_codes = sorted(
-                    set(df_out.loc[blank_cms_mask, 'ch_code'].astype(str).str.strip())
-                )
-                progress_bar.empty()
-                st.session_state.process_confirm = False
-                st.error(
-                    f"🚨 **PROCESS HALTED — MISSING CMS ID**\n\n"
-                    f"Found **{int(blank_cms_mask.sum())}** row(s) with a blank CMS ID.\n\n"
-                    f"**Missing CH CODE(s):**\n"
-                    f"{', '.join(missing_ch_codes)}\n\n"
-                    f"➡️ Please update `cmd_id.xlsx` with the missing CMS ID(s) and re-run the process."
-                )
-                st.stop()
+            # ✅ CMS ID is ONLY required when bank is PIF HOME LOAN
+            if bank_val == "PIF HOME LOAN":
+                blank_cms_mask = df_out['cms_id'] == ''
+                if blank_cms_mask.any():
+                    missing_ch_codes = sorted(
+                        set(df_out.loc[blank_cms_mask, 'ch_code'].astype(str).str.strip())
+                    )
+                    progress_bar.empty()
+                    st.session_state.process_confirm = False
+                    st.error(
+                        f"🚨 **PROCESS HALTED — MISSING CMS ID**\n\n"
+                        f"Found **{int(blank_cms_mask.sum())}** row(s) with a blank CMS ID.\n\n"
+                        f"**Missing CH CODE(s):**\n"
+                        f"{', '.join(missing_ch_codes)}\n\n"
+                        f"➡️ Please update `cmd_id.xlsx` with the missing CMS ID(s) and re-run the process."
+                    )
+                    st.stop()
         else:
             df_out['amount_due'] = '0'
             df_out['cms_id'] = ''
@@ -511,26 +534,6 @@ if selected_tool == "VRP Mapper":
 
         progress_bar.progress(95, text="Generating final files...")
         total_accounts = len(df_out)
-        if version == "MC2":
-            bank_col = None
-            for col in df_src.columns:
-                col_clean = col.strip().upper().replace(" ", "").replace("_", "").replace("/", "")
-                if col_clean == 'BANK':
-                    bank_col = col
-                    break
-            if bank_col:
-                unique_banks = df_src[bank_col].astype(str).str.strip().str.upper().replace({'NAN': ''}).unique()
-                unique_banks = [b for b in unique_banks if b]
-                if len(unique_banks) == 1 and unique_banks[0] == "PIF HOMELOAN":
-                    bank_val = "PIF HOME LOAN"
-                elif len(unique_banks) == 1:
-                    bank_val = unique_banks[0]
-                else:
-                    bank_val = "MC2 OTHERS"
-            else:
-                bank_val = "FILTERED"
-        else:
-            bank_val = "FCL"
 
         st.session_state.generated_filename = f"{bank_val}_{total_accounts}.csv"
         st.session_state.release_filename = f"Released_to_{bank_val}_{total_accounts}.csv"
