@@ -26,13 +26,12 @@ st.set_page_config(page_title="Workspace Tools", page_icon="🧰", layout="wide"
 
 # ========== SESSION STATE INIT ==========
 if 'pasted_codes_input' not in st.session_state:
-    st.session_state.pasted_codes_input = ""  # for resetting the text area
+    st.session_state.pasted_codes_input = ""
 
 # ========== BUTTON ANIMATION STYLING ==========
 st.markdown(
     """
     <style>
-    /* Button hover/active animations */
     .stButton > button, .stDownloadButton > button {
         transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
         border-radius: 8px !important;
@@ -59,9 +58,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ----- Sound notification helper -----
 def play_completion_sound():
-    """Inject HTML/JS to play a short chime sound."""
     html = f"""
     <audio id="completion-sound" style="display:none;"></audio>
     <script>
@@ -82,7 +79,7 @@ def play_completion_sound():
     """
     st.components.v1.html(html, height=0)
 
-# ========== SESSION STATE (other states) ==========
+# ========== SESSION STATE ==========
 if 'uploader_key' not in st.session_state:
     st.session_state.uploader_key = 0
 if 'processed_data' not in st.session_state:
@@ -147,7 +144,6 @@ st.sidebar.info("Select a tool from the menu above to get started.")
 if selected_tool == "VRP Mapper":
     st.title("🚀 VRP Mapper")
 
-    # --- Version Dropdown (OTS removed) ---
     version = st.selectbox(
         "Select Version:",
         options=["MC2", "FCL"],
@@ -156,14 +152,12 @@ if selected_tool == "VRP Mapper":
     )
     st.session_state.version = version
 
-    # --- 1. SETTINGS & TEMPLATE ---
     template_filename = 'demand_letter_template.csv'
     if not os.path.exists(template_filename):
         st.error(f"❌ Error: '{template_filename}' not found.")
         st.stop()
     df_tmp = pd.read_csv(template_filename, dtype=str)
 
-    # --- CMS ID REFERENCE LOADING ---
     @st.cache_data
     def load_cms_data():
         ref_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cmd_id.xlsx")
@@ -181,7 +175,6 @@ if selected_tool == "VRP Mapper":
 
     cms_mapping = load_cms_data()
 
-    # --- AMOUNTS REFERENCE LOADING ---
     @st.cache_data
     def load_amounts_data():
         ref_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "amounts.csv")
@@ -203,7 +196,6 @@ if selected_tool == "VRP Mapper":
 
     amounts_ob_mapping, amounts_due_mapping = load_amounts_data()
 
-    # --- AREA CLUSTER MAPPING ---
     AREA_MAPPING = {
         'ABRA': 'NORTH LUZON', 'AURORA': 'NORTH LUZON', 'BATAAN': 'NORTH LUZON',
         'BENGUET': 'NORTH LUZON', 'BULACAN': 'NORTH LUZON', 'CAGAYAN': 'NORTH LUZON',
@@ -228,7 +220,6 @@ if selected_tool == "VRP Mapper":
 
     st.divider()
 
-    # --- FILE UPLOADER based on version ---
     if version == "MC2":
         src_files = st.file_uploader(
             "Upload VRP ACCOUNTS CSV(s)",
@@ -244,7 +235,6 @@ if selected_tool == "VRP Mapper":
             key=f"uploader_{st.session_state.uploader_key}"
         )
 
-    # Optional filter (pasted codes)
     pasted_codes = st.text_area(
         "Paste Reference Codes (Optional filter - one per line):",
         height=150,
@@ -260,7 +250,6 @@ if selected_tool == "VRP Mapper":
             reset_app()
 
     if st.session_state.process_confirm:
-        # --- READ DATA ---
         if version == "MC2":
             if not src_files:
                 st.warning("Please upload at least one CSV file.")
@@ -283,7 +272,6 @@ if selected_tool == "VRP Mapper":
             df_master = pd.concat(df_list, ignore_index=True)
             is_multiple = True
         else:
-            # FCL – single Excel file, read sheet "SUMMARY"
             if src_files is None:
                 st.warning("Please upload an Excel file.")
                 st.stop()
@@ -303,7 +291,6 @@ if selected_tool == "VRP Mapper":
         progress_bar = st.progress(0, text="Initializing processing...")
         time.sleep(0.2)
 
-        # --- FILTER by reference codes ---
         progress_bar.progress(15, text="Filtering target codes...")
         if pasted_codes.strip():
             codes_list = [c.strip() for c in pasted_codes.replace(',', '\n').split('\n') if c.strip()]
@@ -325,7 +312,6 @@ if selected_tool == "VRP Mapper":
         df_out = pd.DataFrame(columns=df_tmp.columns, index=range(len(df_src)))
         time.sleep(0.2)
 
-        # --- ROBUST COLUMN MAPPING ---
         progress_bar.progress(35, text="Mapping source columns to template...")
         col_map = {
             'account_no': ['ACCOUNT NUMBER', 'ACCOUNT_NO', 'ACCOUNTNUMBER'],
@@ -375,13 +361,20 @@ if selected_tool == "VRP Mapper":
                     .str.replace(r'\bSTA\b\.?', 'SANTA', case=False, regex=True)
                     .str.replace(r'\bSTO\b\.?', 'SANTO', case=False, regex=True)
                 )
-                # Remove "C/O <NAME>"
+                # ---------------------------------------------------------------
+                # REMOVE only the "C/O" token (and its optional punctuation)
+                # Examples:
+                #   "C/O DPWH DAVAO..." → "DPWH DAVAO..."
+                #   "123 MAIN ST C/O JOHN DOE" → "123 MAIN ST JOHN DOE"
+                #   "C/O: MARIA SANTOS" → "MARIA SANTOS"
+                # ---------------------------------------------------------------
                 addr_series = addr_series.str.replace(
-                    r"C/O\s*[:\-]?\s*[A-Za-z][A-Za-z'\.\-\s]*?(?=\s*\d|,|\s+(?:BLOCK|LOT|BARANGAY|STREET|AVE|AVENUE|ROAD|RD|PUROK|POB|UNIT|BLDG|BUILDING|HOUSE|HSE)\b|$)",
+                    r"C\s*/\s*O\.?\s*[:\-]?\s*",
                     '',
                     regex=True,
                     case=False
                 )
+                # Clean up extra spaces and stray leading/trailing separators
                 addr_series = (
                     addr_series
                     .str.replace(r'\s+', ' ', regex=True)
@@ -408,7 +401,6 @@ if selected_tool == "VRP Mapper":
                         return val
                 df_out[template_col] = vals.apply(format_general_number)
             elif template_col == 'type_of_account':
-                # Normalize the source type of account values
                 src_vals = df_src[src_col].astype(str).str.strip()
                 def normalize_type(v):
                     v_up = v.upper()
@@ -416,7 +408,7 @@ if selected_tool == "VRP Mapper":
                         return "Trans/Details"
                     if v_up == 'DL' or 'DL' in v_up:
                         return "DL"
-                    return v  # keep original if unknown
+                    return v
                 df_out[template_col] = src_vals.apply(normalize_type)
             else:
                 df_out[template_col] = df_src[src_col]
@@ -431,7 +423,6 @@ if selected_tool == "VRP Mapper":
 
         time.sleep(0.2)
 
-        # --- AMOUNT DUE & CMS ID ---
         progress_bar.progress(60, text="Calculating constants, amounts, and CMS IDs...")
 
         if 'ch_code' in matched_cols:
@@ -439,9 +430,6 @@ if selected_tool == "VRP Mapper":
             df_out['amount_due'] = ch_codes.map(amounts_due_mapping).fillna('0')
             df_out['cms_id'] = ch_codes.map(cms_mapping).fillna('')
 
-            # ---------------------------------------------------------------
-            # VALIDATION: Check for missing CMS IDs across ALL rows
-            # ---------------------------------------------------------------
             blank_cms_mask = df_out['cms_id'] == ''
 
             if blank_cms_mask.any():
@@ -458,7 +446,6 @@ if selected_tool == "VRP Mapper":
                     f"➡️ Please update `cmd_id.xlsx` with the missing CMS ID(s) and re-run the process."
                 )
                 st.stop()
-            # ---------------------------------------------------------------
         else:
             df_out['amount_due'] = '0'
             df_out['cms_id'] = ''
@@ -466,12 +453,9 @@ if selected_tool == "VRP Mapper":
         df_out['shared_or_exclusive'] = "SHARED"
 
         # --- TYPE OF ACCOUNT ---
-        # Priority: source column (from TYPE OF ACCOUNT in upload) > filename detection
         if 'type_of_account' in matched_cols:
-            # Already set from the mapping loop above — keep those values.
-            pass
+            pass  # already set from source
         else:
-            # Fall back to filename-based detection
             if version == "MC2":
                 if is_multiple:
                     df_out['type_of_account'] = df_src['_FILE_ASSIGNED_TYPE']
@@ -483,7 +467,6 @@ if selected_tool == "VRP Mapper":
             elif version == "FCL":
                 df_out['type_of_account'] = "DL"
 
-        # --- VISIT TYPE ---
         if version == "MC2":
             def determine_visit_type_mc2(idx, row):
                 file_name = str(row.get('_FILE_RAW_NAME', '')).upper()
@@ -546,14 +529,13 @@ if selected_tool == "VRP Mapper":
                     bank_val = "MC2 OTHERS"
             else:
                 bank_val = "FILTERED"
-        else:  # FCL
+        else:
             bank_val = "FCL"
 
         st.session_state.generated_filename = f"{bank_val}_{total_accounts}.csv"
         st.session_state.release_filename = f"Released_to_{bank_val}_{total_accounts}.csv"
         st.session_state.processed_data = df_out
 
-        # --- RELEASE FILE ---
         ref_col_release = None
         for col in df_src.columns:
             col_clean = col.strip().upper().replace(" ", "").replace("_", "")
@@ -579,7 +561,6 @@ if selected_tool == "VRP Mapper":
         st.success(f"✅ Processed {total_accounts} accounts in {elapsed:.2f} seconds.")
         play_completion_sound()
 
-    # Display results
     if st.session_state.processed_data is not None:
         df_out = st.session_state.processed_data
         df_release = st.session_state.release_data
@@ -620,7 +601,7 @@ if selected_tool == "VRP Mapper":
 
 
 # ==========================================
-# TOOL 2: FIELD RESULT (REPLICATED VBA MACRO)
+# TOOL 2: FIELD RESULT
 # ==========================================
 elif selected_tool == "Field Result":
     st.title("📊 Field Result Column Extractor")
