@@ -587,10 +587,8 @@ if selected_tool == "VRP Mapper":
         st.write("### 📥 Download Processed Files")
         col_dl1, col_dl2 = st.columns(2)
         with col_dl1:
-            # ✅ CSV output: add apostrophe prefix to pullout_date ONLY in the CSV file
-            # (Hindi ito makikita sa Streamlit preview — preview stays clean as "2026/11/09")
-            # Ang apostrophe ay nagfo-force sa Excel na i-treat ang value as TEXT,
-            # kaya hindi na nito iko-convert pabalik sa MM/DD/YYYY.
+            # Add apostrophe prefix to pullout_date so Excel treats it as text
+            # (prevents Excel from auto-converting "2026/11/09" back to "11/9/2026")
             df_csv_out = df_out.copy()
             if 'pullout_date' in df_csv_out.columns:
                 df_csv_out['pullout_date'] = df_csv_out['pullout_date'].apply(
@@ -603,12 +601,6 @@ if selected_tool == "VRP Mapper":
                 file_name=main_fn,
                 mime="text/csv",
                 use_container_width=True
-            )
-            st.caption(
-                "ℹ️ **Note:** Sa CSV file, ang `pullout_date` ay may nakatagong "
-                "apostrophe prefix (`'`) para hindi i-convert ng Excel ang "
-                "`YYYY/MM/DD` pabalik sa `MM/DD/YYYY`. Hindi ito lumalabas sa "
-                "Streamlit preview — Text lang ang buong column sa Excel."
             )
         with col_dl2:
             csv_rel = df_release.to_csv(index=False).encode('utf-8')
