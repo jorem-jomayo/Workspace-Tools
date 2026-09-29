@@ -539,6 +539,13 @@ if selected_tool == "VRP Mapper":
             if field in df_out.columns:
                 df_out[field] = pd.to_datetime(df_out[field], errors='coerce').dt.strftime(fmt)
                 df_out[field] = df_out[field].fillna('')
+
+        # ✅ Prevent Excel from auto-converting pullout_date (YYYY/MM/DD) back to MM/DD/YYYY.
+        # Adding a leading apostrophe forces Excel to treat the value as text.
+        if 'pullout_date' in df_out.columns:
+            df_out['pullout_date'] = df_out['pullout_date'].apply(
+                lambda x: f"'{x}" if x else ''
+            )
         time.sleep(0.2)
 
         progress_bar.progress(95, text="Generating final files...")
