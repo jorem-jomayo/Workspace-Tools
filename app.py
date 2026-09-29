@@ -519,7 +519,7 @@ if selected_tool == "VRP Mapper":
         progress_bar.progress(80, text="Formatting dates...")
         # ✅ Date formats (output as strings):
         #   autofield_date    → MM/DD/YYYY
-        #   pullout_date      → YYYY/MM/DD
+        #   pullout_date      → MM/DD/YYYY  ← naka-revert dito
         #   endorsement_date  → DD-MM-YYYY
         if 'autofield_date' in df_out.columns:
             df_out['autofield_date'] = (
@@ -530,7 +530,7 @@ if selected_tool == "VRP Mapper":
         if 'pullout_date' in df_out.columns:
             df_out['pullout_date'] = (
                 pd.to_datetime(df_out['pullout_date'], errors='coerce')
-                .dt.strftime('%Y/%m/%d')
+                .dt.strftime('%m/%d/%Y')
                 .fillna('')
             )
         if 'endorsement_date' in df_out.columns:
@@ -587,14 +587,7 @@ if selected_tool == "VRP Mapper":
         st.write("### 📥 Download Processed Files")
         col_dl1, col_dl2 = st.columns(2)
         with col_dl1:
-            # Add apostrophe prefix to pullout_date so Excel treats it as text
-            # (prevents Excel from auto-converting "2026/11/09" back to "11/9/2026")
-            df_csv_out = df_out.copy()
-            if 'pullout_date' in df_csv_out.columns:
-                df_csv_out['pullout_date'] = df_csv_out['pullout_date'].apply(
-                    lambda x: f"'{x}" if x and str(x).strip() not in ('', 'nan', 'NaT') else ''
-                )
-            csv_main = df_csv_out.to_csv(index=False).encode('utf-8')
+            csv_main = df_out.to_csv(index=False).encode('utf-8')
             st.download_button(
                 label=f"📥 Main CSV ({main_fn})",
                 data=csv_main,
@@ -614,7 +607,6 @@ if selected_tool == "VRP Mapper":
 
         st.divider()
         st.subheader("📋 Main Data Preview")
-        # ✅ Preview uses the CLEAN df_out (no apostrophe) → shows "2026/11/09"
         st.dataframe(df_out.head(10))
         st.subheader("📑 Release File Preview")
         st.dataframe(df_release.head(10))
