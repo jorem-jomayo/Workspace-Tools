@@ -361,20 +361,12 @@ if selected_tool == "VRP Mapper":
                     .str.replace(r'\bSTA\b\.?', 'SANTA', case=False, regex=True)
                     .str.replace(r'\bSTO\b\.?', 'SANTO', case=False, regex=True)
                 )
-                # ---------------------------------------------------------------
-                # REMOVE only the "C/O" token (and its optional punctuation)
-                # Examples:
-                #   "C/O DPWH DAVAO..." → "DPWH DAVAO..."
-                #   "123 MAIN ST C/O JOHN DOE" → "123 MAIN ST JOHN DOE"
-                #   "C/O: MARIA SANTOS" → "MARIA SANTOS"
-                # ---------------------------------------------------------------
                 addr_series = addr_series.str.replace(
                     r"C\s*/\s*O\.?\s*[:\-]?\s*",
                     '',
                     regex=True,
                     case=False
                 )
-                # Clean up extra spaces and stray leading/trailing separators
                 addr_series = (
                     addr_series
                     .str.replace(r'\s+', ' ', regex=True)
@@ -482,7 +474,6 @@ if selected_tool == "VRP Mapper":
         elif 'type_of_account' in matched_cols:
             pass  # MC2: gamitin ang value mula sa source column
         else:
-            # MC2: walang source column — fallback logic
             if is_multiple:
                 df_out['type_of_account'] = df_src['_FILE_ASSIGNED_TYPE']
             else:
@@ -526,25 +517,27 @@ if selected_tool == "VRP Mapper":
             df_out['area_cluster'] = ""
 
         progress_bar.progress(80, text="Formatting dates...")
-        # ✅ Custom date formats per field
+        # ✅ Date formats (output as strings in CSV):
         #   autofield_date    → MM/DD/YYYY
         #   pullout_date      → YYYY/MM/DD
-        #   endorsement_date  → DD-MM-YYYY (unchanged)
-        date_format_map = {
-            'autofield_date': '%m/%d/%Y',
-            'pullout_date': '%Y/%m/%d',
-            'endorsement_date': '%d-%m-%Y',
-        }
-        for field, fmt in date_format_map.items():
-            if field in df_out.columns:
-                df_out[field] = pd.to_datetime(df_out[field], errors='coerce').dt.strftime(fmt)
-                df_out[field] = df_out[field].fillna('')
-
-        # ✅ Prevent Excel from auto-converting pullout_date (YYYY/MM/DD) back to MM/DD/YYYY.
-        # Adding a leading apostrophe forces Excel to treat the value as text.
+        #   endorsement_date  → DD-MM-YYYY
+        if 'autofield_date' in df_out.columns:
+            df_out['autofield_date'] = (
+                pd.to_datetime(df_out['autofield_date'], errors='coerce')
+                .dt.strftime('%m/%d/%Y')
+                .fillna('')
+            )
         if 'pullout_date' in df_out.columns:
-            df_out['pullout_date'] = df_out['pullout_date'].apply(
-                lambda x: f"'{x}" if x else ''
+            df_out['pullout_date'] = (
+                pd.to_datetime(df_out['pullout_date'], errors='coerce')
+                .dt.strftime('%Y/%m/%d')
+                .fillna('')
+            )
+        if 'endorsement_date' in df_out.columns:
+            df_out['endorsement_date'] = (
+                pd.to_datetime(df_out['endorsement_date'], errors='coerce')
+                .dt.strftime('%d-%m-%Y')
+                .fillna('')
             )
         time.sleep(0.2)
 
