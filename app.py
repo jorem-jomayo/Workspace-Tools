@@ -526,10 +526,18 @@ if selected_tool == "VRP Mapper":
             df_out['area_cluster'] = ""
 
         progress_bar.progress(80, text="Formatting dates...")
-        date_fields = ['autofield_date', 'endorsement_date', 'pullout_date']
-        for field in date_fields:
+        # ✅ Custom date formats per field
+        #   autofield_date    → MM/DD/YYYY
+        #   pullout_date      → YYYY/MM/DD
+        #   endorsement_date  → DD-MM-YYYY (unchanged)
+        date_format_map = {
+            'autofield_date': '%m/%d/%Y',
+            'pullout_date': '%Y/%m/%d',
+            'endorsement_date': '%d-%m-%Y',
+        }
+        for field, fmt in date_format_map.items():
             if field in df_out.columns:
-                df_out[field] = pd.to_datetime(df_out[field], errors='coerce').dt.strftime('%d-%m-%Y')
+                df_out[field] = pd.to_datetime(df_out[field], errors='coerce').dt.strftime(fmt)
                 df_out[field] = df_out[field].fillna('')
         time.sleep(0.2)
 
