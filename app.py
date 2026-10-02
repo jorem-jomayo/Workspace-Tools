@@ -28,57 +28,15 @@ st.set_page_config(page_title="Workspace Tools", page_icon="🧰", layout="wide"
 if 'pasted_codes_input' not in st.session_state:
     st.session_state.pasted_codes_input = ""
 
-# ========== BUTTON ANIMATION STYLING ==========
-# FIX: use st.html() instead of st.markdown(unsafe_allow_html=True)
-# to avoid the "appendChild" JS error on Streamlit Cloud.
-st.html(
-    """
-    <style>
-    .stButton > button, .stDownloadButton > button {
-        transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
-        border-radius: 8px !important;
-    }
-    .stButton > button:hover, .stDownloadButton > button:hover {
-        transform: translateY(-4px);
-        box-shadow: 0 10px 20px rgba(0, 0, 0, 0.2) !important;
-        border-color: #2e7d32 !important;
-        animation: gentle-pulse 1.5s infinite ease-in-out;
-        z-index: 1;
-    }
-    .stButton > button:active, .stDownloadButton > button:active {
-        transform: translateY(2px) scale(0.98) !important;
-        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1) !important;
-        animation: none;
-    }
-    @keyframes gentle-pulse {
-        0% { transform: translateY(-4px) scale(1); }
-        50% { transform: translateY(-4px) scale(1.03); }
-        100% { transform: translateY(-4px) scale(1); }
-    }
-    </style>
-    """
-)
-
-# ========== COMPLETION SOUND (FIXED) ==========
+# ========== COMPLETION SOUND (NO-OP) ==========
+# NOTE: Previously this used st.components.v1.html() with inline JS using the
+# Web Audio API. That caused a client-side "SyntaxError: Failed to execute
+# 'appendChild' on 'Node'" on Streamlit Cloud because Streamlit's
+# preload-helper.js couldn't parse the injected script. Disabled entirely
+# to guarantee stability. You can safely remove all calls to this function.
 def play_completion_sound():
-    """Play a short completion beep using a base64-embedded WAV (no JS needed).
-
-    NOTE: The old implementation used st.components.v1.html() with an inline
-    <script> using the Web Audio API. That caused a client-side
-    "SyntaxError: Failed to execute 'appendChild'" on Streamlit Cloud.
-    Replaced with a plain <audio> tag injected via st.markdown, which
-    Streamlit handles without issues.
-    """
-    # Base64-encoded tiny WAV (0.3s, 880 Hz beep, PCM). Silent failure is fine.
-    beep_b64 = (
-        "UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA="
-    )
-    audio_html = (
-        '<audio autoplay style="display:none;">'
-        f'<source src="data:audio/wav;base64,{beep_b64}" type="audio/wav">'
-        '</audio>'
-    )
-    st.markdown(audio_html, unsafe_allow_html=True)
+    """No-op placeholder. Sound disabled for Streamlit Cloud compatibility."""
+    pass
 
 
 # ========== SESSION STATE ==========
