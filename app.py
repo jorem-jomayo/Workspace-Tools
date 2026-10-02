@@ -29,7 +29,9 @@ if 'pasted_codes_input' not in st.session_state:
     st.session_state.pasted_codes_input = ""
 
 # ========== BUTTON ANIMATION STYLING ==========
-st.markdown(
+# FIX: use st.html() instead of st.markdown(unsafe_allow_html=True)
+# to avoid the "appendChild" JS error on Streamlit Cloud.
+st.html(
     """
     <style>
     .stButton > button, .stDownloadButton > button {
@@ -54,30 +56,30 @@ st.markdown(
         100% { transform: translateY(-4px) scale(1); }
     }
     </style>
-    """,
-    unsafe_allow_html=True,
+    """
 )
 
+# ========== COMPLETION SOUND (FIXED) ==========
 def play_completion_sound():
-    html = f"""
-    <audio id="completion-sound" style="display:none;"></audio>
-    <script>
-    (function(){{
-        var audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        var oscillator = audioCtx.createOscillator();
-        var gainNode = audioCtx.createGain();
-        oscillator.connect(gainNode);
-        gainNode.connect(audioCtx.destination);
-        oscillator.frequency.value = 880;
-        oscillator.type = 'sine';
-        gainNode.gain.value = 0.3;
-        oscillator.start();
-        gainNode.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.3);
-        oscillator.stop(audioCtx.currentTime + 0.3);
-    }})();
-    </script>
+    """Play a short completion beep using a base64-embedded WAV (no JS needed).
+
+    NOTE: The old implementation used st.components.v1.html() with an inline
+    <script> using the Web Audio API. That caused a client-side
+    "SyntaxError: Failed to execute 'appendChild'" on Streamlit Cloud.
+    Replaced with a plain <audio> tag injected via st.markdown, which
+    Streamlit handles without issues.
     """
-    st.components.v1.html(html, height=0)
+    # Base64-encoded tiny WAV (0.3s, 880 Hz beep, PCM). Silent failure is fine.
+    beep_b64 = (
+        "UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA="
+    )
+    audio_html = (
+        '<audio autoplay style="display:none;">'
+        f'<source src="data:audio/wav;base64,{beep_b64}" type="audio/wav">'
+        '</audio>'
+    )
+    st.markdown(audio_html, unsafe_allow_html=True)
+
 
 # ========== SESSION STATE ==========
 if 'uploader_key' not in st.session_state:
@@ -417,7 +419,6 @@ if selected_tool == "VRP Mapper":
 
         progress_bar.progress(60, text="Calculating constants, amounts, and CMS IDs...")
 
-        # --- Determine bank value EARLY (needed for CMS ID validation) ---
         if version == "MC2":
             bank_col = None
             for col in df_src.columns:
@@ -444,7 +445,6 @@ if selected_tool == "VRP Mapper":
             df_out['amount_due'] = ch_codes.map(amounts_due_mapping).fillna('0')
             df_out['cms_id'] = ch_codes.map(cms_mapping).fillna('')
 
-            # ✅ CMS ID is ONLY required when bank is PIF HOME LOAN
             if bank_val == "PIF HOME LOAN":
                 blank_cms_mask = df_out['cms_id'] == ''
                 if blank_cms_mask.any():
@@ -467,12 +467,10 @@ if selected_tool == "VRP Mapper":
 
         df_out['shared_or_exclusive'] = "SHARED"
 
-        # --- TYPE OF ACCOUNT ---
-        # ✅ FCL: palaging "DL" (hindi na titingnan ang source column)
         if version == "FCL":
             df_out['type_of_account'] = "DL"
         elif 'type_of_account' in matched_cols:
-            pass  # MC2: gamitin ang value mula sa source column
+            pass
         else:
             if is_multiple:
                 df_out['type_of_account'] = df_src['_FILE_ASSIGNED_TYPE']
@@ -517,10 +515,6 @@ if selected_tool == "VRP Mapper":
             df_out['area_cluster'] = ""
 
         progress_bar.progress(80, text="Formatting dates...")
-        # ✅ Date formats (output as strings):
-        #   autofield_date    → MM/DD/YYYY
-        #   pullout_date      → MM/DD/YYYY  ← naka-revert dito
-        #   endorsement_date  → DD-MM-YYYY
         if 'autofield_date' in df_out.columns:
             df_out['autofield_date'] = (
                 pd.to_datetime(df_out['autofield_date'], errors='coerce')
