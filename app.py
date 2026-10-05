@@ -28,10 +28,18 @@ import io
 import re
 import time
 import zipfile
-import shutil
 from io import BytesIO
 from datetime import datetime, date
-import base64
+
+
+# --- HELPER: Absolute path relative to this file ---
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def abspath(filename):
+    """Return absolute path to a file in the repo root."""
+    return os.path.join(BASE_DIR, filename)
+
 
 # --- PAGE CONFIGURATION MUST BE AT THE VERY TOP ---
 st.set_page_config(page_title="Workspace Tools", page_icon="🧰", layout="wide")
@@ -39,17 +47,13 @@ st.set_page_config(page_title="Workspace Tools", page_icon="🧰", layout="wide"
 
 # ==========================================
 # TOP-LEVEL CACHED DATA LOADERS
-# (Moved out of the if-block to keep cache stable across reruns)
 # ==========================================
-
 @st.cache_data
 def load_cms_data():
-    """Load CMS ID mapping from cmd_id.xlsx (or cmd_id.csv if available)."""
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    xlsx_path = os.path.join(base_dir, "cmd_id.xlsx")
-    csv_path = os.path.join(base_dir, "cmd_id.csv")
+    """Load CMS ID mapping from cmd_id.xlsx (prefers cmd_id.csv if present)."""
+    xlsx_path = abspath("cmd_id.xlsx")
+    csv_path = abspath("cmd_id.csv")
 
-    # Prefer CSV if it exists (much faster than xlsx)
     try:
         if os.path.exists(csv_path):
             df_cms = pd.read_csv(csv_path, dtype=str, keep_default_na=False)
@@ -73,12 +77,10 @@ def load_cms_data():
 @st.cache_data
 def load_amounts_data():
     """Load Amount OB and Principal Amount Due from amounts.csv."""
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    ref_path = os.path.join(base_dir, "amounts.csv")
+    ref_path = abspath("amounts.csv")
     if not os.path.exists(ref_path):
         return {}, {}
     try:
-        # Defensive CSV read: skip malformed lines instead of hanging
         df_amt = pd.read_csv(
             ref_path,
             dtype=str,
@@ -109,18 +111,9 @@ def load_amounts_data():
     return {}, {}
 
 
-# ========== SESSION STATE INIT ==========
+# ========== SESSION STATE ==========
 if 'pasted_codes_input' not in st.session_state:
     st.session_state.pasted_codes_input = ""
-
-
-# ========== COMPLETION SOUND (NO-OP) ==========
-def play_completion_sound():
-    """No-op placeholder. Sound disabled for Streamlit Cloud compatibility."""
-    pass
-
-
-# ========== SESSION STATE ==========
 if 'uploader_key' not in st.session_state:
     st.session_state.uploader_key = 0
 if 'processed_data' not in st.session_state:
@@ -155,6 +148,11 @@ if 'field_result_elapsed' not in st.session_state:
     st.session_state.field_result_elapsed = 0.0
 if 'field_result_extra_csv' not in st.session_state:
     st.session_state.field_result_extra_csv = None
+
+
+def play_completion_sound():
+    """No-op placeholder."""
+    pass
 
 
 def reset_app():
@@ -195,13 +193,15 @@ if selected_tool == "VRP Mapper":
     )
     st.session_state.version = version
 
-    template_filename = 'demand_letter_template.csv'
-    if not os.path.exists(template_filename):
-        st.error(f"❌ Error: '{template_filename}' not found.")
+    # FIX: absolute path for template
+    template_path = abspath('demand_letter_template.csv')
+    if not os.path.exists(template_path):
+        st.error(f"❌ Error: 'demand_letter_template.csv' not found in repo root.")
         st.stop()
-    df_tmp = pd.read_csv(template_filename, dtype=str)
+    df_tmp = pd.read_csv(template_path, dtype=str)
+    df_tmp.columns = df_tmp.columns.str.strip()  # FIX: strip header whitespace
 
-    # Load reference data (cached at top-level)
+    # Load reference data (cached top-level)
     with st.spinner("Loading reference data..."):
         cms_mapping = load_cms_data()
         amounts_ob_mapping, amounts_due_mapping = load_amounts_data()
@@ -237,7 +237,7 @@ if selected_tool == "VRP Mapper":
             accept_multiple_files=True,
             key=f"uploader_{st.session_state.uploader_key}"
         )
-    else:  # FCL
+    else:
         src_files = st.file_uploader(
             "Upload VRP ACCOUNTS Excel file",
             type=['xlsx'],
@@ -260,6 +260,7 @@ if selected_tool == "VRP Mapper":
             reset_app()
 
     if st.session_state.process_confirm:
+        # --- READ SOURCE ---
         if version == "MC2":
             if not src_files:
                 st.warning("Please upload at least one CSV file.")
@@ -288,7 +289,7 @@ if selected_tool == "VRP Mapper":
             try:
                 xl = pd.ExcelFile(src_files)
                 if "SUMMARY" not in xl.sheet_names:
-                    st.error("❌ The Excel file does not contain a sheet named 'SUMMARY'. Please ensure the sheet name is exactly 'SUMMARY'.")
+                    st.error("❌ The Excel file does not contain a sheet named 'SUMMARY'.")
                     st.stop()
                 df_master = pd.read_excel(src_files, sheet_name="SUMMARY", dtype=str, keep_default_na=False)
             except Exception as e:
@@ -301,13 +302,14 @@ if selected_tool == "VRP Mapper":
         progress_bar = st.progress(0, text="Initializing processing...")
         time.sleep(0.2)
 
+        # --- FILTER BY PASTED CODES ---
         progress_bar.progress(15, text="Filtering target codes...")
         if pasted_codes.strip():
             codes_list = [c.strip() for c in pasted_codes.replace(',', '\n').split('\n') if c.strip()]
             ref_col = None
             for col in df_master.columns:
                 col_clean = col.strip().upper().replace(" ", "").replace("_", "")
-                if col_clean in ['REFCODE', 'REFERENCECODE', 'REFCODE']:
+                if col_clean in ['REFCODE', 'REFERENCECODE']:
                     ref_col = col
                     break
             if ref_col:
@@ -322,6 +324,7 @@ if selected_tool == "VRP Mapper":
         df_out = pd.DataFrame(columns=df_tmp.columns, index=range(len(df_src)))
         time.sleep(0.2)
 
+        # --- MAP COLUMNS ---
         progress_bar.progress(35, text="Mapping source columns to template...")
         col_map = {
             'account_no': ['ACCOUNT NUMBER', 'ACCOUNT_NO', 'ACCOUNTNUMBER'],
@@ -372,10 +375,7 @@ if selected_tool == "VRP Mapper":
                     .str.replace(r'\bSTO\b\.?', 'SANTO', case=False, regex=True)
                 )
                 addr_series = addr_series.str.replace(
-                    r"C\s*/\s*O\.?\s*[:\-]?\s*",
-                    '',
-                    regex=True,
-                    case=False
+                    r"C\s*/\s*O\.?\s*[:\-]?\s*", '', regex=True, case=False
                 )
                 addr_series = (
                     addr_series
@@ -396,10 +396,9 @@ if selected_tool == "VRP Mapper":
                         num = float(val)
                         if num == int(num):
                             return str(int(num))
-                        else:
-                            formatted = f"{num:.2f}"
-                            formatted = formatted.rstrip('0').rstrip('.') if '.' in formatted else formatted
-                            return formatted
+                        formatted = f"{num:.2f}"
+                        formatted = formatted.rstrip('0').rstrip('.') if '.' in formatted else formatted
+                        return formatted
                     except ValueError:
                         return val
 
@@ -429,6 +428,7 @@ if selected_tool == "VRP Mapper":
 
         time.sleep(0.2)
 
+        # --- BANK DETECTION ---
         progress_bar.progress(60, text="Calculating constants, amounts, and CMS IDs...")
 
         if version == "MC2":
@@ -452,6 +452,14 @@ if selected_tool == "VRP Mapper":
         else:
             bank_val = "FCL"
 
+        # FIX: always write bank_val to the output column
+        df_out['bank'] = bank_val
+
+        # FIX: default placement (empty if not mapped)
+        if 'placement' not in matched_cols:
+            df_out['placement'] = ''
+
+        # --- AMOUNT DUE + CMS ID ---
         if 'ch_code' in matched_cols:
             ch_codes = df_out['ch_code'].astype(str).str.strip().str.upper()
             df_out['amount_due'] = ch_codes.map(amounts_due_mapping).fillna('0')
@@ -470,7 +478,7 @@ if selected_tool == "VRP Mapper":
                         f"Found **{int(blank_cms_mask.sum())}** row(s) with a blank CMS ID.\n\n"
                         f"**Missing CH CODE(s):**\n"
                         f"{', '.join(missing_ch_codes)}\n\n"
-                        f"➡️ Please update `cmd_id.xlsx` with the missing CMS ID(s) and re-run the process."
+                        f"➡️ Please update `cmd_id.xlsx` with the missing CMS ID(s) and re-run."
                     )
                     st.stop()
         else:
@@ -479,6 +487,7 @@ if selected_tool == "VRP Mapper":
 
         df_out['shared_or_exclusive'] = "SHARED"
 
+        # --- TYPE OF ACCOUNT ---
         if version == "FCL":
             df_out['type_of_account'] = "DL"
         elif 'type_of_account' in matched_cols:
@@ -492,20 +501,30 @@ if selected_tool == "VRP Mapper":
                 else:
                     df_out['type_of_account'] = "DL"
 
+        # --- VISIT TYPE ---
         if version == "MC2":
             def determine_visit_type_mc2(idx, row):
                 file_name = str(row.get('_FILE_RAW_NAME', '')).upper()
-                if any(pattern in file_name for pattern in ["TAG_PIF WITH DL", "TAG_PIF REVISIT- NO DL", "TAG_MC2- OTHERS"]):
+                if any(pattern in file_name for pattern in
+                       ["TAG_PIF WITH DL", "TAG_PIF REVISIT- NO DL", "TAG_MC2- OTHERS"]):
                     return "REGULAR"
 
-                current_type = df_out.at[idx, 'type_of_account']
+                # FIX: defensive access to type_of_account
+                if 'type_of_account' in df_out.columns and idx in df_out.index:
+                    current_type = df_out.at[idx, 'type_of_account']
+                else:
+                    current_type = ""
                 if current_type == "Trans/Details":
                     return "REGULAR"
+
                 remark = str(row.get('REMARKS', '')).strip().upper() if 'REMARKS' in row else ''
                 bank = str(row.get('BANK', '')).strip().upper() if 'BANK' in row else ''
                 if "PIF FORECLOSURE" in bank:
                     return "OTS"
-                regular_banks = ["CBS HOUSING LOAN", "PIF PROVIDENT", "SBF MORTGAGE", "UBP HOME MORTGAGE", "SBC HOME LOAN", "SBF HOMELOAN"]
+                regular_banks = [
+                    "CBS HOUSING LOAN", "PIF PROVIDENT", "SBF MORTGAGE",
+                    "UBP HOME MORTGAGE", "SBC HOME LOAN", "SBF HOMELOAN"
+                ]
                 if any(target in bank for target in regular_banks):
                     return "REGULAR"
                 if remark in ["NEW ENDO", "REVISIT", "NEW ENDO-PRI ADD"]:
@@ -514,40 +533,44 @@ if selected_tool == "VRP Mapper":
                     return "CARAVAN"
                 return ""
 
-            df_out['visit_type'] = [determine_visit_type_mc2(idx, row) for idx, row in df_src.iterrows()]
+            df_out['visit_type'] = [
+                determine_visit_type_mc2(idx, row) for idx, row in df_src.iterrows()
+            ]
         elif version == "FCL":
             df_out['visit_type'] = "OTS"
 
+        # --- STATIC FIELDS ---
         df_out['month'] = datetime.now().strftime('%B').upper()
         df_out['account_type'] = "HOUSING"
         df_out['form_code'] = "vid04qNT"
 
         if 'area' in matched_cols:
-            df_out['area_cluster'] = df_src[matched_cols['area']].str.strip().str.upper().map(AREA_MAPPING)
+            df_out['area_cluster'] = (
+                df_src[matched_cols['area']].str.strip().str.upper().map(AREA_MAPPING)
+            )
         else:
             df_out['area_cluster'] = ""
 
+        # --- FORMAT DATES ---
         progress_bar.progress(80, text="Formatting dates...")
         if 'autofield_date' in df_out.columns:
             df_out['autofield_date'] = (
                 pd.to_datetime(df_out['autofield_date'], errors='coerce')
-                .dt.strftime('%m/%d/%Y')
-                .fillna('')
+                .dt.strftime('%m/%d/%Y').fillna('')
             )
         if 'pullout_date' in df_out.columns:
             df_out['pullout_date'] = (
                 pd.to_datetime(df_out['pullout_date'], errors='coerce')
-                .dt.strftime('%m/%d/%Y')
-                .fillna('')
+                .dt.strftime('%m/%d/%Y').fillna('')
             )
         if 'endorsement_date' in df_out.columns:
             df_out['endorsement_date'] = (
                 pd.to_datetime(df_out['endorsement_date'], errors='coerce')
-                .dt.strftime('%d-%m-%Y')
-                .fillna('')
+                .dt.strftime('%d-%m-%Y').fillna('')
             )
         time.sleep(0.2)
 
+        # --- BUILD FILES ---
         progress_bar.progress(95, text="Generating final files...")
         total_accounts = len(df_out)
 
@@ -558,7 +581,7 @@ if selected_tool == "VRP Mapper":
         ref_col_release = None
         for col in df_src.columns:
             col_clean = col.strip().upper().replace(" ", "").replace("_", "")
-            if col_clean in ['REFCODE', 'REFERENCECODE', 'REFCODE']:
+            if col_clean in ['REFCODE', 'REFERENCECODE']:
                 ref_col_release = col
                 break
 
@@ -637,7 +660,9 @@ elif selected_tool == "Field Result":
             try:
                 progress_bar = st.progress(0, text="Reading Excel file...")
                 xl_file = pd.ExcelFile(excel_file)
-                target_sheet = next((sheet for sheet in xl_file.sheet_names if sheet.upper() == "RESULT"), None)
+                target_sheet = next(
+                    (sheet for sheet in xl_file.sheet_names if sheet.upper() == "RESULT"), None
+                )
 
                 if not target_sheet:
                     progress_bar.empty()
@@ -648,9 +673,11 @@ elif selected_tool == "Field Result":
                     time.sleep(0.2)
 
                     df_source = pd.read_excel(excel_file, sheet_name=target_sheet, header=None, dtype=str)
+
+                    # FIX: proper off-by-one handling
                     max_needed = max(41, FIELD_NAME_COL, REF_CODE_COL) + 1
-                    if df_source.shape[1] <= max_needed:
-                        for i in range(df_source.shape[1], max_needed + 1):
+                    if df_source.shape[1] < max_needed:
+                        for i in range(df_source.shape[1], max_needed):
                             df_source[i] = ""
 
                     df_target = pd.DataFrame()
@@ -680,7 +707,7 @@ elif selected_tool == "Field Result":
                            re.match(r'^\d{1,2}/\d{1,2}/\d{4}( \d{2}:\d{2}:\d{2}(\.\d+)?)?$', val_str):
                             try:
                                 return pd.to_datetime(val_str).date()
-                            except:
+                            except Exception:
                                 return val
                         return val
 
@@ -767,7 +794,6 @@ elif selected_tool == "Field Result":
 elif selected_tool == "E-SIGN FIXER":
     st.title("✒️ E-SIGN FIXER")
 
-    # Guard: check if OpenCV and python-docx are available
     if not OPENCV_AVAILABLE or not DOCX_AVAILABLE:
         st.error("⚠️ **E-SIGN FIXER is unavailable** — missing dependencies.")
         missing = []
@@ -776,7 +802,7 @@ elif selected_tool == "E-SIGN FIXER":
         if not DOCX_AVAILABLE:
             missing.append("`python-docx`")
         st.warning(
-            f"To enable this tool, uncomment the following in `requirements.txt`:\n\n"
+            "To enable this tool, uncomment the following in `requirements.txt`:\n\n"
             + "\n".join(f"- {m}" for m in missing)
             + "\n\nThen push to GitHub and reboot the app."
         )
@@ -842,7 +868,7 @@ elif selected_tool == "E-SIGN FIXER":
                 square_canvas = np.zeros((max_dim, max_dim, 4), dtype=np.uint8)
                 y_offset = (max_dim - h_sig) // 2
                 x_offset = (max_dim - w_sig) // 2
-                square_canvas[y_offset:y_offset+h_sig, x_offset:x_offset+w_sig] = rgba
+                square_canvas[y_offset:y_offset + h_sig, x_offset:x_offset + w_sig] = rgba
                 final_sig = cv2.resize(square_canvas, (TARGET_SIZE, TARGET_SIZE), interpolation=cv2.INTER_AREA)
                 extracted_signatures.append(final_sig)
 
@@ -876,9 +902,15 @@ elif selected_tool == "E-SIGN FIXER":
 
                 c1, c2 = st.columns(2)
                 with c1:
-                    st.download_button("📦 ZIP Images", zip_buffer.getvalue(), "signatures.zip", "application/zip", use_container_width=True)
+                    st.download_button(
+                        "📦 ZIP Images", zip_buffer.getvalue(),
+                        "signatures.zip", "application/zip", use_container_width=True
+                    )
                 with c2:
-                    st.download_button("📝 Word Document", word_buffer.getvalue(), "signatures.docx", use_container_width=True)
+                    st.download_button(
+                        "📝 Word Document", word_buffer.getvalue(),
+                        "signatures.docx", use_container_width=True
+                    )
 
                 st.divider()
                 cols = st.columns(4)
