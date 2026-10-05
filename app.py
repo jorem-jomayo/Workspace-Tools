@@ -2,13 +2,25 @@
 import streamlit as st  # type: ignore
 import pandas as pd  # type: ignore
 import numpy as np  # type: ignore
-import cv2  # type: ignore
 from PIL import Image  # type: ignore
 import openpyxl  # type: ignore
 from openpyxl.styles import Font  # type: ignore
 from openpyxl.utils import get_column_letter  # type: ignore
-from docx import Document  # type: ignore
-from docx.shared import Inches  # type: ignore
+
+# --- OPTIONAL: OpenCV (for E-SIGN FIXER) ---
+try:
+    import cv2  # type: ignore
+    OPENCV_AVAILABLE = True
+except ImportError:
+    OPENCV_AVAILABLE = False
+
+# --- OPTIONAL: python-docx (for E-SIGN FIXER) ---
+try:
+    from docx import Document  # type: ignore
+    from docx.shared import Inches  # type: ignore
+    DOCX_AVAILABLE = True
+except ImportError:
+    DOCX_AVAILABLE = False
 
 # --- PYTHON STANDARD LIBRARY ---
 import os
@@ -24,16 +36,85 @@ import base64
 # --- PAGE CONFIGURATION MUST BE AT THE VERY TOP ---
 st.set_page_config(page_title="Workspace Tools", page_icon="🧰", layout="wide")
 
+
+# ==========================================
+# TOP-LEVEL CACHED DATA LOADERS
+# (Moved out of the if-block to keep cache stable across reruns)
+# ==========================================
+
+@st.cache_data
+def load_cms_data():
+    """Load CMS ID mapping from cmd_id.xlsx (or cmd_id.csv if available)."""
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    xlsx_path = os.path.join(base_dir, "cmd_id.xlsx")
+    csv_path = os.path.join(base_dir, "cmd_id.csv")
+
+    # Prefer CSV if it exists (much faster than xlsx)
+    try:
+        if os.path.exists(csv_path):
+            df_cms = pd.read_csv(csv_path, dtype=str, keep_default_na=False)
+        elif os.path.exists(xlsx_path):
+            df_cms = pd.read_excel(xlsx_path, dtype=str, keep_default_na=False)
+        else:
+            return {}
+        df_cms.columns = df_cms.columns.str.strip().str.upper()
+        cms_col = next((c for c in df_cms.columns if c in ['CMS ID', 'CMS_ID']), None)
+        ch_col = next((c for c in df_cms.columns if c in ['CH CODE', 'CH_CODE']), None)
+        if ch_col and cms_col:
+            return dict(zip(
+                df_cms[ch_col].astype(str).str.strip().str.upper(),
+                df_cms[cms_col].astype(str).str.strip()
+            ))
+    except Exception as e:
+        st.error(f"❌ Error loading CMS data: {e}")
+    return {}
+
+
+@st.cache_data
+def load_amounts_data():
+    """Load Amount OB and Principal Amount Due from amounts.csv."""
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    ref_path = os.path.join(base_dir, "amounts.csv")
+    if not os.path.exists(ref_path):
+        return {}, {}
+    try:
+        # Defensive CSV read: skip malformed lines instead of hanging
+        df_amt = pd.read_csv(
+            ref_path,
+            dtype=str,
+            keep_default_na=False,
+            on_bad_lines='skip',
+            engine='python',
+        )
+        df_amt.columns = df_amt.columns.str.strip()
+        ch_col = next(
+            (c for c in df_amt.columns if c.upper().replace(" ", "") in ['CHCODE', 'CH_CODE']),
+            None
+        )
+        ob_col = next((c for c in df_amt.columns if c.strip().upper() == 'AMOUNT OB'), None)
+        due_col = next((c for c in df_amt.columns if c.strip().upper() == 'PRINCIPAL AMOUNT DUE'), None)
+        if ch_col and ob_col and due_col:
+            df_amt[ch_col] = df_amt[ch_col].astype(str).str.strip().str.upper()
+            ob_dict = dict(zip(
+                df_amt[ch_col],
+                df_amt[ob_col].astype(str).str.strip().str.replace(',', '', regex=False)
+            ))
+            due_dict = dict(zip(
+                df_amt[ch_col],
+                df_amt[due_col].astype(str).str.strip().str.replace(',', '', regex=False)
+            ))
+            return ob_dict, due_dict
+    except Exception as e:
+        st.error(f"❌ Error loading amounts.csv: {e}")
+    return {}, {}
+
+
 # ========== SESSION STATE INIT ==========
 if 'pasted_codes_input' not in st.session_state:
     st.session_state.pasted_codes_input = ""
 
+
 # ========== COMPLETION SOUND (NO-OP) ==========
-# NOTE: Previously this used st.components.v1.html() with inline JS using the
-# Web Audio API. That caused a client-side "SyntaxError: Failed to execute
-# 'appendChild' on 'Node'" on Streamlit Cloud because Streamlit's
-# preload-helper.js couldn't parse the injected script. Disabled entirely
-# to guarantee stability. You can safely remove all calls to this function.
 def play_completion_sound():
     """No-op placeholder. Sound disabled for Streamlit Cloud compatibility."""
     pass
@@ -75,6 +156,7 @@ if 'field_result_elapsed' not in st.session_state:
 if 'field_result_extra_csv' not in st.session_state:
     st.session_state.field_result_extra_csv = None
 
+
 def reset_app():
     st.session_state.uploader_key += 1
     st.session_state.processed_data = None
@@ -86,6 +168,7 @@ def reset_app():
     st.session_state.cms_id_warning = None
     st.session_state.pop('pasted_codes_input', None)
     st.rerun()
+
 
 # ========== SIDEBAR ==========
 st.sidebar.title("🛠️ Workspace")
@@ -118,43 +201,10 @@ if selected_tool == "VRP Mapper":
         st.stop()
     df_tmp = pd.read_csv(template_filename, dtype=str)
 
-    @st.cache_data
-    def load_cms_data():
-        ref_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cmd_id.xlsx")
-        if os.path.exists(ref_path):
-            try:
-                df_cms = pd.read_excel(ref_path, dtype=str)
-                df_cms.columns = df_cms.columns.str.strip().str.upper()
-                cms_col = next((c for c in df_cms.columns if c in ['CMS ID', 'CMS_ID']), None)
-                ch_col = next((c for c in df_cms.columns if c in ['CH CODE', 'CH_CODE']), None)
-                if ch_col and cms_col:
-                    return dict(zip(df_cms[ch_col].str.strip().str.upper(), df_cms[cms_col].str.strip()))
-            except Exception:
-                pass
-        return {}
-
-    cms_mapping = load_cms_data()
-
-    @st.cache_data
-    def load_amounts_data():
-        ref_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "amounts.csv")
-        if os.path.exists(ref_path):
-            try:
-                df_amt = pd.read_csv(ref_path, dtype=str)
-                df_amt.columns = df_amt.columns.str.strip()
-                ch_col = next((c for c in df_amt.columns if c.upper().replace(" ", "") in ['CHCODE', 'CH_CODE']), None)
-                ob_col = next((c for c in df_amt.columns if c.strip().upper() == 'AMOUNT OB'), None)
-                due_col = next((c for c in df_amt.columns if c.strip().upper() == 'PRINCIPAL AMOUNT DUE'), None)
-                if ch_col and ob_col and due_col:
-                    df_amt[ch_col] = df_amt[ch_col].str.strip().str.upper()
-                    ob_dict = dict(zip(df_amt[ch_col], df_amt[ob_col].str.strip().str.replace(',', '', regex=False)))
-                    due_dict = dict(zip(df_amt[ch_col], df_amt[due_col].str.strip().str.replace(',', '', regex=False)))
-                    return ob_dict, due_dict
-            except Exception:
-                pass
-        return {}, {}
-
-    amounts_ob_mapping, amounts_due_mapping = load_amounts_data()
+    # Load reference data (cached at top-level)
+    with st.spinner("Loading reference data..."):
+        cms_mapping = load_cms_data()
+        amounts_ob_mapping, amounts_due_mapping = load_amounts_data()
 
     AREA_MAPPING = {
         'ABRA': 'NORTH LUZON', 'AURORA': 'NORTH LUZON', 'BATAAN': 'NORTH LUZON',
@@ -174,7 +224,7 @@ if selected_tool == "VRP Mapper":
         'DAVAO ORIENTAL': 'MINDANAO', 'LANAO DEL NORTE': 'MINDANAO', 'LANAO DEL SUR': 'MINDANAO',
         'MAGUINDANAO': 'MINDANAO', 'MISAMIS OCCIDENTAL': 'MINDANAO', 'MISAMIS ORIENTAL': 'MINDANAO',
         'SARANGANI': 'MINDANAO', 'SOUTH COTABATO': 'MINDANAO', 'SULTAN KUDARAT': 'MINDANAO',
-        'SULU': 'MINDANAO', 'SURIGAO DEL SUR': 'MINDANAO', 'TARLAC': 'MINDANAO', 'TAWI-TAWI': 'MINDANAO',
+        'SULU': 'MINDANAO', 'SURIGAO DEL SUR': 'MINDANAO', 'TAWI-TAWI': 'MINDANAO',
         'ZAMBOANGA DEL NORTE': 'MINDANAO', 'ZAMBOANGA DEL SUR': 'MINDANAO', 'ZAMBOANGA SIBUGAY': 'MINDANAO'
     }
 
@@ -338,6 +388,7 @@ if selected_tool == "VRP Mapper":
                 df_out[template_col] = addr_series
             elif template_col == 'outstanding_balance':
                 vals = df_src[src_col].astype(str).str.strip().str.replace(',', '', regex=False)
+
                 def format_general_number(val):
                     if val in ['nan', 'None', '', '0', '0.0']:
                         return '0'
@@ -351,9 +402,11 @@ if selected_tool == "VRP Mapper":
                             return formatted
                     except ValueError:
                         return val
+
                 df_out[template_col] = vals.apply(format_general_number)
             elif template_col == 'type_of_account':
                 src_vals = df_src[src_col].astype(str).str.strip()
+
                 def normalize_type(v):
                     v_up = v.upper()
                     if 'TRANS' in v_up or 'DETAIL' in v_up:
@@ -361,6 +414,7 @@ if selected_tool == "VRP Mapper":
                     if v_up == 'DL' or 'DL' in v_up:
                         return "DL"
                     return v
+
                 df_out[template_col] = src_vals.apply(normalize_type)
             else:
                 df_out[template_col] = df_src[src_col]
@@ -459,6 +513,7 @@ if selected_tool == "VRP Mapper":
                 if remark == "CARAVAN":
                     return "CARAVAN"
                 return ""
+
             df_out['visit_type'] = [determine_visit_type_mc2(idx, row) for idx, row in df_src.iterrows()]
         elif version == "FCL":
             df_out['visit_type'] = "OTS"
@@ -711,6 +766,22 @@ elif selected_tool == "Field Result":
 # ==========================================
 elif selected_tool == "E-SIGN FIXER":
     st.title("✒️ E-SIGN FIXER")
+
+    # Guard: check if OpenCV and python-docx are available
+    if not OPENCV_AVAILABLE or not DOCX_AVAILABLE:
+        st.error("⚠️ **E-SIGN FIXER is unavailable** — missing dependencies.")
+        missing = []
+        if not OPENCV_AVAILABLE:
+            missing.append("`opencv-python-headless`")
+        if not DOCX_AVAILABLE:
+            missing.append("`python-docx`")
+        st.warning(
+            f"To enable this tool, uncomment the following in `requirements.txt`:\n\n"
+            + "\n".join(f"- {m}" for m in missing)
+            + "\n\nThen push to GitHub and reboot the app."
+        )
+        st.stop()
+
     st.write("Upload an image page containing multiple sheet signatures to crop them out into isolated transparent files.")
 
     TARGET_SIZE = 250
